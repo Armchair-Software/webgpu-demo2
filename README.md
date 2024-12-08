@@ -10,6 +10,8 @@ This also demonstrates how you might set up gamepad input with the above backend
 
 ![image](https://github.com/user-attachments/assets/7bb8d5bf-f627-4fa0-9bda-a6b5b47c9bbe)
 
+For the next demo, see https://github.com/Armchair-Software/boids-webgpu-demo.
+
 ## Live demo
 Live demo: https://armchair-software.github.io/webgpu-demo2/
 
