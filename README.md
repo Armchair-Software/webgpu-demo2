@@ -1,3 +1,5 @@
+[![CI Build](https://github.com/Armchair-Software/webgpu-demo2/actions/workflows/ci-build.yml/badge.svg)](https://github.com/Armchair-Software/webgpu-demo2/actions)
+
 # WebGPU Emscripten demo 2 for the Armchair Engine
 
 This is part two of a simple proof of concept, a minimal 3D engine written in C++, compiled to WASM with Emscripten.  Running in the browser, rendering with WebGPU.
