@@ -211,17 +211,17 @@ target_link_options(client PRIVATE
   ${opt_and_debug_linker_options}
   -lwebsocket.js
   --bind
-  -sALLOW_MEMORY_GROWTH=1
+  -sALLOW_MEMORY_GROWTH
   -sSTACK_SIZE=5mb
   -sWASM_BIGINT
-  -sELIMINATE_DUPLICATE_FUNCTIONS=1
   -sUSE_WEBGPU
-  -sFETCH=1
-  -sUSE_FREETYPE=1
+  -sFETCH
+  -sUSE_FREETYPE
   ${exception_link_options}
   -sEXPORTED_RUNTIME_METHODS=[ccall]
   -sLLD_REPORT_UNDEFINED
-  -sENVIRONMENT=web                                                             # don't emit code for node.js etc
+  -sELIMINATE_DUPLICATE_FUNCTIONS
+  #-sVERBOSE
   --shell-file=${CMAKE_SOURCE_DIR}/html/client.html
   # embedded files
   --preload-file ../assets@/
