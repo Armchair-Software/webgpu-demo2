@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <emscripten/em_types.h>
 #include <webgpu/webgpu_cpp.h>
 #include "logstorm/logstorm_forward.h"
@@ -31,6 +32,15 @@ public:
     friend class webgpu_renderer;
   };
 
+  enum class states {
+    uninitialised,
+    ready_to_init,
+    waiting_for_device,
+    ready_to_configure,
+    ready_to_draw,
+    failed,
+  } state{states::uninitialised};
+
 private:
   webgpu_data webgpu;
 
@@ -40,7 +50,7 @@ private:
     float device_pixel_ratio{1.0f};
   } window;
 
-  std::function<void(webgpu_data const&)> postinit_callback;                    // the callback that is called once when init completes (it cannot return normally because of emscripten's loop mechanism)
+  std::function<void(webgpu_data const&)> postinit_callback;                    // the callback that is called once when init completes
   std::function<void()> main_loop_callback;                                     // the callback that is called repeatedly for the main loop after init
 
 public:
@@ -54,8 +64,6 @@ private:
 
   void wait_to_configure_loop();
   void configure();
-
-  void update_imgui_size();
 
 public:
   void draw(vec2f const& rotation);

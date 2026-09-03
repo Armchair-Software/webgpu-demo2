@@ -16,6 +16,8 @@
 #include "uniforms.h"
 #include "shaders/default.wgsl.h"
 
+//#define DEBUG_WEBGPU
+
 namespace render {
 
 namespace {
@@ -138,10 +140,12 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
     webgpu.surface = webgpu.instance.CreateSurface(&surface_descriptor);
   }
   if(!webgpu.surface) throw std::runtime_error{"Could not create WebGPU surface"};
+  state = states::ready_to_init;
 }
 
 void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postinit_callback, std::function<void()> &&this_main_loop_callback) {
   /// Initialise the WebGPU system
+  assert(state == states::ready_to_init && "webgpu_renderer::init requires state ready_to_init");
   postinit_callback = this_postinit_callback;
   main_loop_callback = this_main_loop_callback;
 
@@ -174,7 +178,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
         webgpu.surface.GetCapabilities(adapter, &surface_capabilities);
 
         // report surface and adapter capabilities
-        #ifndef NDEBUG
+        #ifdef DEBUG_WEBGPU
           {
             for(size_t i{0}; i != surface_capabilities.formatCount; ++i) {
               logger << "DEBUG: WebGPU surface capabilities: texture formats: " << magic_enum::enum_name(surface_capabilities.formats[i]);
@@ -186,7 +190,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
               logger << "DEBUG: WebGPU surface capabilities: alpha modes: " << magic_enum::enum_name(surface_capabilities.alphaModes[i]);
             }
           }
-        #endif // NDEBUG
+        #endif // DEBUG_WEBGPU
 
         if(surface_capabilities.formatCount != 0) {
           webgpu.surface_preferred_format = surface_capabilities.formats[0];
@@ -200,7 +204,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
         {
           wgpu::AdapterInfo adapter_info;
           adapter.GetInfo(&adapter_info);
-          #ifndef NDEBUG
+          #ifdef DEBUG_WEBGPU
             logger << "DEBUG: WebGPU adapter info: vendor: " << string_wgpu(adapter_info.vendor);
             logger << "DEBUG: WebGPU adapter info: architecture: " << string_wgpu(adapter_info.architecture);
             logger << "DEBUG: WebGPU adapter info: device: " << string_wgpu(adapter_info.device);
@@ -208,7 +212,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
             logger << "DEBUG: WebGPU adapter info: vendorID:deviceID: " << adapter_info.vendorID << ":" << adapter_info.deviceID;
             logger << "DEBUG: WebGPU adapter info: backendType: " << magic_enum::enum_name(adapter_info.backendType);
             logger << "DEBUG: WebGPU adapter info: adapterType: " << magic_enum::enum_name(adapter_info.adapterType);
-          #endif // NDEBUG
+          #endif // DEBUG_WEBGPU
           logger << "WebGPU adapter info: " << string_wgpu(adapter_info.description) << " (" << magic_enum::enum_name(adapter_info.backendType) << ", " << string_wgpu(adapter_info.vendor) << ", " << string_wgpu(adapter_info.architecture) << ")";
         }
         std::set<wgpu::FeatureName> adapter_features;
@@ -216,19 +220,23 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
           // see https://developer.mozilla.org/en-US/docs/Web/API/GPUSupportedFeatures and https://www.w3.org/TR/webgpu/#feature-index
           wgpu::SupportedFeatures adapter_supported_features;
           adapter.GetFeatures(&adapter_supported_features);
-          logger << "DEBUG: WebGPU adapter features count: " << adapter_supported_features.featureCount;
+          #ifdef DEBUG_WEBGPU
+            logger << "DEBUG: WebGPU adapter features count: " << adapter_supported_features.featureCount;
+          #endif // DEBUG_WEBGPU
           for(size_t i{0}; i != adapter_supported_features.featureCount; ++i) {
             adapter_features.emplace(adapter_supported_features.features[i]);
           }
         }
-        for(auto const feature : adapter_features) {
-          logger << "DEBUG: WebGPU adapter features: " << enum_wgpu_name(feature);
-        }
+        #ifdef DEBUG_WEBGPU
+          for(auto const feature : adapter_features) {
+            logger << "DEBUG: WebGPU adapter features: " << enum_wgpu_name(feature);
+          }
+        #endif // DEBUG_WEBGPU
 
         wgpu::Limits adapter_limits;
         bool const result{adapter.GetLimits(&adapter_limits)};
         if(!result) throw std::runtime_error{"WebGPU: Could not query adapter limits"};
-        #ifndef NDEBUG
+        #ifdef DEBUG_WEBGPU
           logger << "DEBUG: WebGPU adapter limits result: " << std::boolalpha << result;
           logger << "DEBUG: WebGPU adapter limits nextInChain: " << adapter_limits.nextInChain;
           logger << "DEBUG: WebGPU adapter limits maxTextureDimension1D: " << adapter_limits.maxTextureDimension1D;
@@ -261,7 +269,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
           logger << "DEBUG: WebGPU adapter limits maxComputeWorkgroupSizeY: " << adapter_limits.maxComputeWorkgroupSizeY;
           logger << "DEBUG: WebGPU adapter limits maxComputeWorkgroupSizeZ: " << adapter_limits.maxComputeWorkgroupSizeZ;
           logger << "DEBUG: WebGPU adapter limits maxComputeWorkgroupsPerDimension: " << adapter_limits.maxComputeWorkgroupsPerDimension;
-        #endif // NDEBUG
+        #endif // DEBUG_WEBGPU
 
         // specify required features for the device
         std::set<wgpu::FeatureName> required_features{
@@ -310,6 +318,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
             auto &renderer{*renderer_ptr};
             auto &logger{renderer.logger};
             logger << "ERROR: WebGPU lost device, reason " << enum_wgpu_name<wgpu::DeviceLostReason>(reason) << ": " << string_wgpu(message);
+            renderer.state = states::failed;
           },
           &renderer
         );
@@ -319,6 +328,7 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
             auto &renderer{*renderer_ptr};
             auto &logger{renderer.logger};
             logger << "ERROR: WebGPU uncaptured error " << enum_wgpu_name<wgpu::ErrorType>(type) << ": " << string_wgpu(message);
+            renderer.state = states::failed;
           },
           &renderer
         );
@@ -344,17 +354,17 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
             {
               wgpu::SupportedFeatures device_supported_features;
               device.GetFeatures(&device_supported_features);
-              #ifndef NDEBUG
+              #ifdef DEBUG_WEBGPU
                 logger << "DEBUG: WebGPU device features count: " << device_supported_features.featureCount;
-              #endif // NDEBUG
+              #endif // DEBUG_WEBGPU
               for(size_t i{0}; i != device_supported_features.featureCount; ++i) {
                 device_features.emplace(device_supported_features.features[i]);
               }
             }
-            for(auto const feature : device_features) {
-              logger << "DEBUG: WebGPU device features: " << magic_enum::enum_name(feature);
-            }
-            #ifndef NDEBUG
+            #ifdef DEBUG_WEBGPU
+              for(auto const feature : device_features) {
+                logger << "DEBUG: WebGPU device features: " << magic_enum::enum_name(feature);
+              }
               {
                 wgpu::Limits adapter_limits;
                 bool result{device.GetLimits(&adapter_limits)};
@@ -391,8 +401,9 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
                 logger << "DEBUG: WebGPU device limits maxComputeWorkgroupSizeZ: " << adapter_limits.maxComputeWorkgroupSizeZ;
                 logger << "DEBUG: WebGPU device limits maxComputeWorkgroupsPerDimension: " << adapter_limits.maxComputeWorkgroupsPerDimension;
               }
-            #endif // NDEBUG
+            #endif // DEBUG_WEBGPU
 
+            renderer.state = states::ready_to_configure;
           },
           &renderer
         );
@@ -400,17 +411,29 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
       this
     );
   }
+  state = states::waiting_for_device;
 
   emscripten_set_main_loop_arg([](void *data){
     /// Dispatch the loop waiting for WebGPU to become ready
     auto &renderer{*static_cast<webgpu_renderer*>(data)};
     renderer.wait_to_configure_loop();
-  }, this, 0, true);                                                            // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), simulate infinite loop
-  std::unreachable();
+  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
 void webgpu_renderer::configure_surface() {
   /// Create or recreate the configured surface for the current viewport size
+  // Adapter/device acquisition is asynchronous, so refresh the browser dimensions
+  // immediately before configuration as they may have changed since construction.
+  window.css_viewport_size.assign(
+    emscripten::val::global("window")["innerWidth"].as<unsigned int>(),
+    emscripten::val::global("window")["innerHeight"].as<unsigned int>()
+  );
+  window.device_pixel_ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
+  window.viewport_size.assign(
+    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.x) * window.device_pixel_ratio)),
+    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.y) * window.device_pixel_ratio))
+  );
+
   emscripten_set_canvas_element_size(
     "#canvas",
     static_cast<int>(window.viewport_size.x),
@@ -463,8 +486,9 @@ void webgpu_renderer::init_depth_texture() {
 void webgpu_renderer::wait_to_configure_loop() {
   /// Check if initialisation has completed and the WebGPU system is ready for configuration
   /// Since init occurs asynchronously, some emscripten ticks are needed before this becomes true
-  if(!webgpu.device) {
-    logger << "WebGPU: Waiting for device to become available";
+  if(state != states::ready_to_configure) {
+    logger << "WebGPU: Waiting for device to become available, currently " << magic_enum::enum_name(state);
+    if(state == states::failed) throw std::runtime_error{"WebGPU device failed to initialise"};
     // TODO: sensible timeout
     return;
   }
@@ -482,12 +506,12 @@ void webgpu_renderer::wait_to_configure_loop() {
     /// Main pseudo-loop waiting for initialisation to complete
     auto &renderer{*static_cast<webgpu_renderer*>(data)};
     renderer.main_loop_callback();
-  }, this, 0, true);                                                            // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), simulate infinite loop
-  std::unreachable();
+  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
 void webgpu_renderer::configure() {
   /// When the device is ready, configure the WebGPU system
+  assert(state == states::ready_to_configure && "webgpu_renderer::configure requires state ready_to_configure");
   logger << "WebGPU device ready, configuring surface";
   configure_surface();
 
@@ -632,10 +656,12 @@ void webgpu_renderer::configure() {
       return true;                                                              // the event was consumed
     })
   );
+  state = states::ready_to_draw;
 }
 
 void webgpu_renderer::draw(vec2f const& rotation) {
   /// Draw a frame
+  assert(state == states::ready_to_draw && "webgpu_renderer::draw requires state ready_to_draw");
   wgpu::SurfaceTexture surface_texture;
   webgpu.surface.GetCurrentTexture(&surface_texture);
   if(surface_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal

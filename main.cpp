@@ -67,7 +67,6 @@ game_manager::game_manager() {
       loop_main();
     }
   );
-  std::unreachable();
 }
 
 void game_manager::register_gamepad_events() {
@@ -204,8 +203,8 @@ void game_manager::loop_main() {
 
 auto main()->int {
   try {
-    game_manager game;
-    std::unreachable();
+    // The browser owns the asynchronous callbacks for the lifetime of the page.
+    new game_manager;
 
   } catch (std::exception const &e) {
     std::cerr << "Exception: " << e.what() << std::endl;
