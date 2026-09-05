@@ -12,6 +12,8 @@
 #include "enum_name.h"
 #include "logstorm/manager.h"
 
+//#define DEBUG_WEBGPU
+
 namespace armchair::render::webgpu {
 
 context::context(logstorm::manager &this_logger)
@@ -23,9 +25,17 @@ void context::init() {
   /// Initialise the universal WebGPU context and asynchronously acquire its adapter and device
   assert(state == states::uninitialised && "WebGPU context init requires state uninitialised");
 
-  logger << "WebGPU: Viewport size: " << canvas.css_size << " (nominal device pixels: approx " << canvas.css_size * canvas.device_pixel_ratio << ", framebuffer " << canvas.framebuffer_size << ")";
-  logger << "WebGPU: CSS viewport size: " << canvas.css_size << " CSS pixels (framebuffer: " << canvas.framebuffer_size << " device pixels)";
-  logger << "WebGPU: Device pixel ratio: " << canvas.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * canvas.device_pixel_ratio)) << "% scale)";
+  canvas.observe(+[]([[maybe_unused]] canvas_state const &canvas, void *data) {
+    auto &webgpu{*static_cast<context*>(data)};
+    #ifdef DEBUG_WEBGPU
+      webgpu.log_viewport_size("DEBUG: ");
+    #endif // DEBUG_WEBGPU
+    if(webgpu.state != states::ready) return;
+    webgpu.configure_surface();
+    webgpu.init_depth_texture();
+  }, this);
+
+  log_viewport_size();
 
   {
     wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector surface_descriptor_from_canvas;
@@ -38,7 +48,6 @@ void context::init() {
     surface = instance.CreateSurface(&surface_descriptor);
   }
   if(!surface) throw std::runtime_error{"Could not create WebGPU surface"};
-  state = states::ready_to_init;
 
   wgpu::RequestAdapterOptions adapter_request_options{
     .powerPreference{wgpu::PowerPreference::HighPerformance},
@@ -302,6 +311,63 @@ void context::init() {
     },
     this
   );
+}
+
+void context::log_viewport_size(char const *prefix) const {
+  logger << prefix << "WebGPU: Viewport size: " << canvas.css_size << " (nominal device pixels: approx " << canvas.css_size * canvas.device_pixel_ratio << ", framebuffer " << canvas.framebuffer_size << ")";
+  logger << prefix << "WebGPU: CSS viewport size: " << canvas.css_size << " CSS pixels (framebuffer: " << canvas.framebuffer_size << " device pixels)";
+  logger << prefix << "WebGPU: Device pixel ratio: " << canvas.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * canvas.device_pixel_ratio)) << "% scale)";
+}
+
+void context::configure_surface() {
+  /// Create or recreate the configured surface for the current viewport size
+  assert((state == states::ready_to_configure || state == states::ready) && "WebGPU surface configuration requires context ready_to_configure or ready");
+
+  wgpu::SurfaceConfiguration surface_configuration{
+    .device{device},
+    .format{surface_preferred_format},
+    .usage{wgpu::TextureUsage::RenderAttachment},
+    .width{canvas.framebuffer_size.x},
+    .height{canvas.framebuffer_size.y},
+    .alphaMode{wgpu::CompositeAlphaMode::Auto},
+    .presentMode{wgpu::PresentMode::Fifo},
+  };
+  surface.Configure(&surface_configuration);
+  state = states::surface_configured;
+}
+
+void context::init_depth_texture() {
+  /// Create or recreate the depth buffer and its texture view
+  assert(state == states::surface_configured && "WebGPU depth texture initialisation requires a configured surface");
+
+  {
+    wgpu::TextureDescriptor depth_texture_descriptor{
+      .label{"Depth texture 1"},
+      .usage{wgpu::TextureUsage::RenderAttachment},
+      .dimension{wgpu::TextureDimension::e2D},
+      .size{
+        canvas.framebuffer_size.x,
+        canvas.framebuffer_size.y,
+        1
+      },
+      .format{depth_texture_format},
+      .viewFormatCount{1},
+      .viewFormats{&depth_texture_format},
+    };
+    depth_texture = device.CreateTexture(&depth_texture_descriptor);
+  }
+  {
+    wgpu::TextureViewDescriptor depth_texture_view_descriptor{
+      .label{"Depth texture view 1"},
+      .format{depth_texture_format},
+      .dimension{wgpu::TextureViewDimension::e2D},
+      .mipLevelCount{1},
+      .arrayLayerCount{1},
+      .aspect{wgpu::TextureAspect::DepthOnly},
+    };
+    depth_texture_view = depth_texture.CreateView(&depth_texture_view_descriptor);
+  }
+  state = states::ready;
 }
 
 }

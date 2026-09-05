@@ -4,16 +4,14 @@
 #include "canvas.h"
 #include "logstorm/logstorm_forward.h"
 
-//#define DEBUG_WEBGPU
-
 namespace armchair::render::webgpu {
 
 enum class states {
   uninitialised,
-  ready_to_init,
   waiting_for_device,
   ready_to_configure,
-  ready_to_draw,
+  surface_configured,
+  ready,
   failed,
 };
 
@@ -39,6 +37,13 @@ public:
   context(logstorm::manager &logger);
 
   void init();
+
+private:
+  void log_viewport_size(char const *prefix = "") const;
+
+public:
+  void configure_surface();
+  void init_depth_texture();
 };
 
 }

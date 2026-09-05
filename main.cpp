@@ -74,7 +74,7 @@ void game_manager::loop_wait_startup_graphics() {
   emscripten_cancel_main_loop();
 
   renderer.configure();
-  if(renderer.webgpu.state != armchair::render::webgpu::states::ready_to_draw) {
+  if(renderer.state != render::webgpu_renderer::states::ready_to_draw) {
     throw std::runtime_error{"ERROR: WebGPU renderer is not ready to draw after configuration!"};
   }
 

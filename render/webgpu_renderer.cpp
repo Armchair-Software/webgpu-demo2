@@ -1,7 +1,6 @@
 #include "webgpu_renderer.h"
 #include "logstorm/manager.h"
 #include <array>
-#include <cmath>
 #include <vector>
 #include <imgui/imgui_impl_wgpu.h>
 #include "armchair2/render/webgpu/enum_name.h"
@@ -13,7 +12,7 @@
 namespace render {
 
 using armchair::render::webgpu::enum_name;
-using armchair::render::webgpu::states;
+using webgpu_states = armchair::render::webgpu::states;
 
 webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   : logger{this_logger},
@@ -25,76 +24,18 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
     },
     webgpu{logger} {
   /// Construct a WebGPU renderer and populate those members that don't require delayed init
-  webgpu.canvas.observe(+[]([[maybe_unused]] armchair::render::webgpu::canvas_state const &canvas, void *data) {
-    auto &renderer{*static_cast<webgpu_renderer*>(data)};
-    #ifdef DEBUG_WEBGPU
-      renderer.logger << "DEBUG: WebGPU: Viewport size: " << canvas.css_size << " (nominal device pixels: approx " << canvas.css_size * canvas.device_pixel_ratio << ", framebuffer " << canvas.framebuffer_size << ")";
-      renderer.logger << "DEBUG: WebGPU: CSS viewport size: " << canvas.css_size << " CSS pixels (framebuffer: " << canvas.framebuffer_size << " device pixels)";
-      renderer.logger << "DEBUG: WebGPU: Device pixel ratio: " << canvas.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * canvas.device_pixel_ratio)) << "% scale)";
-    #endif // DEBUG_WEBGPU
-    if(renderer.webgpu.state != states::ready_to_draw) return;
-    renderer.configure_surface();
-    renderer.init_depth_texture();
-  }, this);
-
   webgpu.init();
-}
-
-
-void webgpu_renderer::configure_surface() {
-  /// Create or recreate the configured surface for the current viewport size
-
-  wgpu::SurfaceConfiguration surface_configuration{
-    .device{webgpu.device},
-    .format{webgpu.surface_preferred_format},
-    .usage{wgpu::TextureUsage::RenderAttachment},
-    .width{webgpu.canvas.framebuffer_size.x},
-    .height{webgpu.canvas.framebuffer_size.y},
-    .alphaMode{wgpu::CompositeAlphaMode::Auto},
-    .presentMode{wgpu::PresentMode::Fifo},
-  };
-  webgpu.surface.Configure(&surface_configuration);
-}
-
-void webgpu_renderer::init_depth_texture() {
-  /// Create or recreate the depth buffer and its texture view
-  {
-    wgpu::TextureDescriptor depth_texture_descriptor{
-      .label{"Depth texture 1"},
-      .usage{wgpu::TextureUsage::RenderAttachment},
-      .dimension{wgpu::TextureDimension::e2D},
-      .size{
-        webgpu.canvas.framebuffer_size.x,
-        webgpu.canvas.framebuffer_size.y,
-        1
-      },
-      .format{webgpu.depth_texture_format},
-      .viewFormatCount{1},
-      .viewFormats{&webgpu.depth_texture_format},
-    };
-    webgpu.depth_texture = webgpu.device.CreateTexture(&depth_texture_descriptor);
-  }
-  {
-    wgpu::TextureViewDescriptor depth_texture_view_descriptor{
-      .label{"Depth texture view 1"},
-      .format{webgpu.depth_texture_format},
-      .dimension{wgpu::TextureViewDimension::e2D},
-      .mipLevelCount{1},
-      .arrayLayerCount{1},
-      .aspect{wgpu::TextureAspect::DepthOnly},
-    };
-    webgpu.depth_texture_view = webgpu.depth_texture.CreateView(&depth_texture_view_descriptor);
-  }
 }
 
 void webgpu_renderer::configure() {
   /// When the device is ready, configure the WebGPU system
-  assert(webgpu.state == states::ready_to_configure && "webgpu_renderer::configure requires state ready_to_configure");
+  assert(state == states::unconfigured && "webgpu_renderer::configure requires an unconfigured renderer");
+  assert(webgpu.state == webgpu_states::ready_to_configure && "webgpu_renderer::configure requires WebGPU context ready_to_configure");
   logger << "WebGPU device ready, configuring surface";
   // Adapter/device acquisition is asynchronous, so refresh the browser dimensions
   // immediately before configuration as they may have changed since construction.
   webgpu.canvas.update_size();
-  configure_surface();
+  webgpu.configure_surface();
 
   logger << "WebGPU assembling shaders";
   {
@@ -212,14 +153,15 @@ void webgpu_renderer::configure() {
   }
 
   logger << "WebGPU creating depth texture";
-  init_depth_texture();
+  webgpu.init_depth_texture();
 
-  webgpu.state = states::ready_to_draw;
+  state = states::ready_to_draw;
 }
 
 void webgpu_renderer::draw(vec2f const& rotation) {
   /// Draw a frame
-  assert(webgpu.state == states::ready_to_draw && "webgpu_renderer::draw requires state ready_to_draw");
+  assert(state == states::ready_to_draw && "webgpu_renderer::draw requires state ready_to_draw");
+  assert(webgpu.state == webgpu_states::ready && "webgpu_renderer::draw requires a ready WebGPU context");
   wgpu::SurfaceTexture surface_texture;
   webgpu.surface.GetCurrentTexture(&surface_texture);
   if(surface_texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal
