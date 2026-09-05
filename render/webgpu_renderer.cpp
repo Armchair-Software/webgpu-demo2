@@ -97,7 +97,7 @@ void webgpu_renderer::configure() {
     };
 
     wgpu::DepthStencilState depth_stencil_state{
-      .format{wgpu::TextureFormat::Depth24Plus},
+      .format{webgpu.depth_texture_format},
       .depthWriteEnabled{true},
       .depthCompare{wgpu::CompareFunction::Less},
       .stencilFront{},                                                          // StencilFaceState
