@@ -12,13 +12,15 @@ public:
   vec2ui framebuffer_size;
   double device_pixel_ratio{1.0};
 
-  void observe(resize_callback callback, void *callback_data);
-  bool update_size();
-
 private:
   resize_callback callback{nullptr};
   void *callback_data{nullptr};
 
+public:
+  void observe(resize_callback callback, void *callback_data);
+  bool update_size();
+
+private:
   void notify_resize();
 };
 
