@@ -9,6 +9,16 @@
 namespace render {
 
 class webgpu_renderer {
+  /// Initialisation and run flow should be as follows:
+  ///   - Construct the renderer,
+  ///   - Start wait loop
+  ///     - Wait, repeatedly checking until state == ready_to_configure,
+  ///   - Call configure(),
+  ///   - Initialise gui or anything else that needs the surface
+  ///   - Start main loop
+  ///     - Normal loop logic
+  ///     - Call gui.draw() (state == ready_to_draw)
+  ///     - Call renderer.draw()
   logstorm::manager &logger;
 
 public:
@@ -18,7 +28,7 @@ public:
     wgpu::Adapter adapter;                                                      // WebGPU adapter once it has been acquired
     wgpu::Device device;                                                        // WebGPU device once it has been acquired
     wgpu::Queue queue;                                                          // the queue for this device, once it has been acquired
-    wgpu::BindGroupLayout bind_group_layout;                                    // layout for the uniform bind group
+    wgpu::BindGroupLayout bind_group_layout_default;                            // layout for the default uniform bind group
     wgpu::RenderPipeline pipeline;                                              // the render pipeline currently in use
 
     wgpu::Texture depth_texture;                                                // depth buffer

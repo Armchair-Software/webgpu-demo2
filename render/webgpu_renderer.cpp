@@ -658,12 +658,12 @@ void webgpu_renderer::configure() {
       .entryCount{1},
       .entries{&binding_layout},
     };
-    webgpu.bind_group_layout = webgpu.device.CreateBindGroupLayout(&bind_group_layout_descriptor);
+    webgpu.bind_group_layout_default = webgpu.device.CreateBindGroupLayout(&bind_group_layout_descriptor);
 
     wgpu::PipelineLayoutDescriptor pipeline_layout_descriptor{
       .label{"Pipeline layout 1"},
       .bindGroupLayoutCount{1},
-      .bindGroupLayouts{&webgpu.bind_group_layout},
+      .bindGroupLayouts{&webgpu.bind_group_layout_default},
     };
     wgpu::PipelineLayout pipeline_layout{webgpu.device.CreatePipelineLayout(&pipeline_layout_descriptor)};
 
@@ -828,7 +828,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     };
     wgpu::BindGroupDescriptor bind_group_descriptor{
       .label{"Bind group 1"},
-      .layout{webgpu.bind_group_layout},
+      .layout{webgpu.bind_group_layout_default},
       .entryCount{1},                                                           // must correspond to layout
       .entries{&bind_group_entry},
     };
