@@ -20,53 +20,6 @@
 namespace render {
 
 namespace {
-mat4f make_projection_matrix(vec2f const &viewport_size) {
-  /// Set up a projection matrix based on the FOV and the relevant planes
-  enum class fov_mode_type {                                                    // how we set the field of view
-    horizontal,                                                                 // field of view measures max horizontal angle of view
-    vertical,                                                                   // field of view measures max vertical angle of view
-    diagonal,                                                                   // field of view measures max diagonal angle of view
-  } fov_mode{fov_mode_type::diagonal};
-
-  float fov_angle{110.0f};                                                      // field of view, in degrees
-  float fov_angle_rad{DEG2RAD(fov_angle)};                                      // field of view, in radians - automatically updated from degrees
-  float clip_plane_near{1.0f};                                                  // near clip plane
-  float clip_plane_far{100'000.0f};                                             // far clip plane
-
-  #pragma GCC diagnostic push
-  #pragma GCC diagnostic error "-Wswitch"                                       // enforce exhaustive switch here
-  switch(fov_mode) {
-  #pragma GCC diagnostic pop
-  case fov_mode_type::horizontal:
-    {
-      float const aspect_ratio{viewport_size.y / viewport_size.x};
-      float const right{std::tan(fov_angle_rad * 0.5f) * clip_plane_near};
-      float const top{right * aspect_ratio};
-      //logger << "DEBUG: horizontal aspect_ratio " << aspect_ratio;
-      return mat4f::create_frustum(-right, right, -top, top, clip_plane_near, clip_plane_far);
-    }
-  case fov_mode_type::vertical:
-    {
-      float const aspect_ratio{viewport_size.x / viewport_size.y};
-      float const top{std::tan(fov_angle_rad * 0.5f) * clip_plane_near};
-      float const right{top * aspect_ratio};
-      //logger << "DEBUG: vertical aspect_ratio " << aspect_ratio;
-      return mat4f::create_frustum(-right, right, -top, top, clip_plane_near, clip_plane_far);
-    }
-  case fov_mode_type::diagonal:
-    {
-      float const diagonal{std::tan(fov_angle_rad * 0.5f) * clip_plane_near};
-      float const viewport_diagonal{viewport_size.length()};
-      float const right{diagonal * (viewport_size.x / viewport_diagonal)};
-      float const top{  diagonal * (viewport_size.y / viewport_diagonal)};
-      //logger << "DEBUG: diagonal aspect_ratio " << viewport_size.x / viewport_size.y;
-      return mat4f::create_frustum(-right, right, -top, top, clip_plane_near, clip_plane_far);
-    }
-    // no default case, to enforce exhaustive switch
-  }
-  std::unreachable();
-}
-
 template<typename Tcpp, typename Tc>
   requires (!std::is_same_v<Tcpp, Tc>)
 std::string enum_wgpu_name(Tc enum_in) {
@@ -108,7 +61,13 @@ std::string_view string_wgpu(wgpu::StringView string_in) {
 }
 
 webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
-  : logger{this_logger} {
+  : logger{this_logger},
+    projection{
+      .mode{armchair::render::fov_mode::diagonal},
+      .field_of_view_degrees{110.0f},
+      .near_plane{1.0f},
+      .far_plane{100'000.0f},
+    } {
   /// Construct a WebGPU renderer and populate those members that don't require delayed init
   if(!webgpu.instance) throw std::runtime_error{"Could not initialize WebGPU"};
 
@@ -766,7 +725,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     vec3f camera_pos{0.0f, 2.0f, -5.0f};
     camera_pos.rotate_rad_x(angles.y);
 
-    mat4f projection{make_projection_matrix(static_cast<vec2f>(window.viewport_size))};
+      mat4f projection_matrix{projection.matrix(static_cast<vec2f>(window.viewport_size))};
     mat4f look_at{mat4f::create_look_at(
       camera_pos,                                                               // eye pos
       {0.0f, 0.0f, 0.0f},                                                       // target pos
@@ -774,7 +733,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     )};
 
     uniforms uniform_data{
-      projection * look_at * model_rotation.transform(),
+        projection_matrix * look_at * model_rotation.transform(),
       mat3fwgpu{model_rotation.rotmatrix()},
     };
 

@@ -3,6 +3,7 @@
 #include <functional>
 #include <emscripten/em_types.h>
 #include <webgpu/webgpu_cpp.h>
+#include "armchair2/render/projection.h"
 #include "logstorm/logstorm_forward.h"
 #include "vectorstorm/vector/vector2.h"
 
@@ -22,6 +23,8 @@ class webgpu_renderer {
   logstorm::manager &logger;
 
 public:
+  armchair::render::perspective_projection projection;
+
   struct webgpu_data {
     wgpu::Instance instance{wgpu::CreateInstance()};                            // the underlying WebGPU instance
     wgpu::Surface surface;                                                      // the canvas surface for rendering

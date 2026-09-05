@@ -124,6 +124,7 @@ add_compile_definitions(
 add_executable(client
   # project-specific:
   main.cpp
+  armchair2/render/projection.cpp
   gui/clipboard.cpp
   gui/gui_renderer.cpp
   render/webgpu_renderer.cpp
