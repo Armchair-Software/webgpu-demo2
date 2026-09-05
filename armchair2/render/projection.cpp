@@ -9,7 +9,7 @@ mat4f perspective_projection::matrix(vec2f const &viewport_size) const {
   float const field_of_view_radians{deg2rad(field_of_view_degrees)};
 
   #pragma GCC diagnostic push
-  #pragma GCC diagnostic error "-Wswitch"                                      // enforce exhaustive switch here
+  #pragma GCC diagnostic error "-Wswitch"                                       // enforce exhaustive switch here
   switch(mode) {
   #pragma GCC diagnostic pop
   case fov_mode::horizontal:
