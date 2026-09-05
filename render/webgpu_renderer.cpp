@@ -8,7 +8,6 @@
 #include <vector>
 #include <emscripten.h>
 #include <emscripten/html5.h>
-#include <emscripten/val.h>
 #include <imgui/imgui_impl_wgpu.h>
 #include <magic_enum/magic_enum.hpp>
 #include "vertex.h"
@@ -113,20 +112,57 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   /// Construct a WebGPU renderer and populate those members that don't require delayed init
   if(!webgpu.instance) throw std::runtime_error{"Could not initialize WebGPU"};
 
+  auto const resize_callback{+[](void *data) {
+    auto &renderer{*static_cast<webgpu_renderer*>(data)};
+    if(!renderer.update_viewport_size() || renderer.state != states::ready_to_draw) return;
+    renderer.configure_surface();
+    renderer.init_depth_texture();
+  }};
+  EM_ASM({
+    const canvas = Module["canvas"];
+    if(!canvas.__webgpu_device_pixel_resize_observer) {
+      const resize_callback = wasmTable.get($0);
+      const set_canvas_size = (width, height) => {
+        width = Math.max(1, Math.round(width));
+        height = Math.max(1, Math.round(height));
+        if(canvas.width !== width) canvas.width = width;
+        if(canvas.height !== height) canvas.height = height;
+      };
+      const set_approximate_canvas_size = () => {
+        const rect = canvas.getBoundingClientRect();
+        set_canvas_size(rect.width * window.devicePixelRatio, rect.height * window.devicePixelRatio);
+      };
+      set_approximate_canvas_size();
+      if(typeof ResizeObserver !== "undefined") {
+        const has_device_pixel_content_box = typeof ResizeObserverEntry !== "undefined" && "devicePixelContentBoxSize" in ResizeObserverEntry.prototype;
+        const observer = new ResizeObserver((entries) => {
+          const entry = entries[0];
+          const device_sizes = has_device_pixel_content_box ? entry.devicePixelContentBoxSize : null;
+          const device_size = device_sizes && device_sizes.length ? device_sizes[0] : device_sizes;
+          if(device_size) set_canvas_size(device_size.inlineSize, device_size.blockSize);
+          else set_approximate_canvas_size();
+          resize_callback($1);
+        });
+        observer.observe(canvas, {box: has_device_pixel_content_box ? "device-pixel-content-box" : "content-box"});
+        canvas.__webgpu_device_pixel_resize_observer = observer;
+        if(!has_device_pixel_content_box) console.warn("ResizeObserver device-pixel-content-box is unavailable; canvas sizing will approximate using devicePixelRatio.");
+      } else {
+        console.warn("ResizeObserver is unavailable; canvas sizing will approximate using devicePixelRatio.");
+        window.addEventListener("resize", () => {
+          set_approximate_canvas_size();
+          resize_callback($1);
+        });
+        canvas.__webgpu_device_pixel_resize_observer = true;
+      }
+    }
+  }, resize_callback, this);
+
   // Find the initial framebuffer size. Browser dimensions are CSS pixels, while
   // WebGPU surfaces and depth textures are sized in device pixels.
-  window.css_viewport_size.assign(
-    emscripten::val::global("window")["innerWidth"].as<unsigned int>(),
-    emscripten::val::global("window")["innerHeight"].as<unsigned int>()
-  );
-  window.device_pixel_ratio = emscripten::val::global("window")["devicePixelRatio"].as<float>(); // query device pixel ratio using JS
-  window.viewport_size.assign(
-    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.x) * window.device_pixel_ratio)),
-    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.y) * window.device_pixel_ratio))
-  );
-  logger << "WebGPU: Viewport size: " << window.css_viewport_size << " (device pixels: approx " << static_cast<vec2f>(window.css_viewport_size) * window.device_pixel_ratio << ")";
+  update_viewport_size();
+  logger << "WebGPU: Viewport size: " << window.css_viewport_size << " (nominal device pixels: approx " << window.css_viewport_size * window.device_pixel_ratio << ", framebuffer " << window.viewport_size << ")";
   logger << "WebGPU: CSS viewport size: " << window.css_viewport_size << " CSS pixels (framebuffer: " << window.viewport_size << " device pixels)";
-  logger << "WebGPU: Device pixel ratio: " << window.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0f * window.device_pixel_ratio)) << "% scale)";
+  logger << "WebGPU: Device pixel ratio: " << window.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * window.device_pixel_ratio)) << "% scale)";
 
   // create a surface
   {
@@ -420,19 +456,35 @@ void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postin
   }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
+bool webgpu_renderer::update_viewport_size() {
+  /// Refresh the CSS viewport and device-pixel framebuffer sizes, and return whether the viewport size has changed
+  int framebuffer_width{0};
+  int framebuffer_height{0};
+  if(emscripten_get_canvas_element_size("#canvas", &framebuffer_width, &framebuffer_height) != EMSCRIPTEN_RESULT_SUCCESS) {
+    throw std::runtime_error{"Could not read canvas framebuffer size"};
+  }
+  vec2ui const new_viewport_size{static_cast<unsigned int>(framebuffer_width), static_cast<unsigned int>(framebuffer_height)};
+
+  if(new_viewport_size.x == 0 || new_viewport_size.y == 0 || new_viewport_size == window.viewport_size) return false;
+
+  double css_width{0.0};
+  double css_height{0.0};
+  if(emscripten_get_element_css_size("#canvas", &css_width, &css_height) != EMSCRIPTEN_RESULT_SUCCESS) {
+    throw std::runtime_error{"Could not read canvas CSS size"};
+  }
+  window.css_viewport_size.assign(css_width, css_height);
+  window.device_pixel_ratio = emscripten_get_device_pixel_ratio();
+  window.viewport_size = new_viewport_size;
+  #ifdef DEBUG_WEBGPU
+    logger << "DEBUG: WebGPU: Viewport size: " << window.css_viewport_size << " (nominal device pixels: approx " << window.css_viewport_size * window.device_pixel_ratio << ", framebuffer " << window.viewport_size << ")";
+    logger << "DEBUG: WebGPU: CSS viewport size: " << window.css_viewport_size << " CSS pixels (framebuffer: " << window.viewport_size << " device pixels)";
+    logger << "DEBUG: WebGPU: Device pixel ratio: " << window.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * window.device_pixel_ratio)) << "% scale)";
+  #endif // DEBUG_WEBGPU
+  return true;
+}
+
 void webgpu_renderer::configure_surface() {
   /// Create or recreate the configured surface for the current viewport size
-  // Adapter/device acquisition is asynchronous, so refresh the browser dimensions
-  // immediately before configuration as they may have changed since construction.
-  window.css_viewport_size.assign(
-    emscripten::val::global("window")["innerWidth"].as<unsigned int>(),
-    emscripten::val::global("window")["innerHeight"].as<unsigned int>()
-  );
-  window.device_pixel_ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
-  window.viewport_size.assign(
-    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.x) * window.device_pixel_ratio)),
-    static_cast<unsigned int>(std::round(static_cast<float>(window.css_viewport_size.y) * window.device_pixel_ratio))
-  );
 
   emscripten_set_canvas_element_size(
     "#canvas",
@@ -513,6 +565,9 @@ void webgpu_renderer::configure() {
   /// When the device is ready, configure the WebGPU system
   assert(state == states::ready_to_configure && "webgpu_renderer::configure requires state ready_to_configure");
   logger << "WebGPU device ready, configuring surface";
+  // Adapter/device acquisition is asynchronous, so refresh the browser dimensions
+  // immediately before configuration as they may have changed since construction.
+  update_viewport_size();
   configure_surface();
 
   logger << "WebGPU acquiring queue";
@@ -636,26 +691,6 @@ void webgpu_renderer::configure() {
   logger << "WebGPU creating depth texture";
   init_depth_texture();
 
-  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false,   // target, userdata, use_capture, callback
-    ([](int /*event_type*/, EmscriptenUiEvent const *event, void *data) {       // event_type == EMSCRIPTEN_EVENT_RESIZE
-      auto &renderer{*static_cast<webgpu_renderer*>(data)};
-      renderer.window.css_viewport_size.assign(
-        static_cast<unsigned int>(event->windowInnerWidth),
-        static_cast<unsigned int>(event->windowInnerHeight)
-      );
-      renderer.window.device_pixel_ratio = static_cast<float>(emscripten_get_device_pixel_ratio());
-      vec2ui const framebuffer_size{
-        static_cast<unsigned int>(std::round(static_cast<float>(renderer.window.css_viewport_size.x) * renderer.window.device_pixel_ratio)),
-        static_cast<unsigned int>(std::round(static_cast<float>(renderer.window.css_viewport_size.y) * renderer.window.device_pixel_ratio))
-      };
-      if(framebuffer_size.x == 0 || framebuffer_size.y == 0 || framebuffer_size == renderer.window.viewport_size) return true;
-
-      renderer.window.viewport_size = framebuffer_size;
-      renderer.configure_surface();
-      renderer.init_depth_texture();
-      return true;                                                              // the event was consumed
-    })
-  );
   state = states::ready_to_draw;
 }
 
@@ -672,167 +707,165 @@ void webgpu_renderer::draw(vec2f const& rotation) {
   wgpu::TextureView texture_view{surface_texture.texture.CreateView()};
   if(!texture_view) throw std::runtime_error{"Could not get current texture view from surface"};
 
+  wgpu::CommandEncoderDescriptor command_encoder_descriptor{
+    .label = "Command encoder 1"
+  };
+  wgpu::CommandEncoder command_encoder{webgpu.device.CreateCommandEncoder(&command_encoder_descriptor)};
+
   {
-    wgpu::CommandEncoderDescriptor command_encoder_descriptor{
-      .label = "Command encoder 1"
+    // set up render pass
+    wgpu::RenderPassColorAttachment render_pass_colour_attachment{
+      .view{texture_view},
+      .loadOp{wgpu::LoadOp::Clear},
+      .storeOp{wgpu::StoreOp::Store},
+      .clearValue{wgpu::Color{0, 0.5, 0.5, 1.0}},
     };
-    wgpu::CommandEncoder command_encoder{webgpu.device.CreateCommandEncoder(&command_encoder_descriptor)};
 
-    {
-      // set up render pass
-      wgpu::RenderPassColorAttachment render_pass_colour_attachment{
-        .view{texture_view},
-        .loadOp{wgpu::LoadOp::Clear},
-        .storeOp{wgpu::StoreOp::Store},
-        .clearValue{wgpu::Color{0, 0.5, 0.5, 1.0}},
-      };
-
-      wgpu::RenderPassDepthStencilAttachment render_pass_depth_stencil_attachment{
-        .view{webgpu.depth_texture_view},
-        .depthLoadOp{wgpu::LoadOp::Clear},
-        .depthStoreOp{wgpu::StoreOp::Store},
-        .depthClearValue{1.0f},
-      };
-      wgpu::RenderPassDescriptor render_pass_descriptor{
-        .label{"Render pass 1"},
-        .colorAttachmentCount{1},
-        .colorAttachments{&render_pass_colour_attachment},
-        .depthStencilAttachment{&render_pass_depth_stencil_attachment},
-      };
-      wgpu::RenderPassEncoder render_pass_encoder{command_encoder.BeginRenderPass(&render_pass_descriptor)};
-
-      render_pass_encoder.SetPipeline(webgpu.pipeline);                         // select which render pipeline to use
-
-      // set up test buffers
-      std::vector<vertex> vertex_data{
-        {{-1.0f, -1.0f, -1.0f}, { 0.0f, -1.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // bottom face normal & colour
-        {{+1.0f, -1.0f, -1.0f}, {+1.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // right face normal & colour
-        {{+1.0f, +1.0f, -1.0f}, { 0.0f,  0.0f, -1.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // front face normal & colour
-        {{-1.0f, +1.0f, -1.0f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // left face normal & colour
-        {{-1.0f, -1.0f, +1.0f}, { 0.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // normal & colour not used
-        {{+1.0f, -1.0f, +1.0f}, { 0.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // normal & colour not used
-        {{+1.0f, +1.0f, +1.0f}, { 0.0f, +1.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // top face normal & colour
-        {{-1.0f, +1.0f, +1.0f}, { 0.0f,  0.0f, +1.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // back face normal & colour
-      };
-      std::vector<triangle_index> index_data{
-        {0, 1, 5}, {0, 5, 4},                                                   // bottom face (y = -1)
-        {1, 6, 5}, {1, 2, 6},                                                   // right face (x = +1)
-        {2, 1, 0}, {2, 0, 3},                                                   // front face (z = -1)
-        {3, 0, 4}, {3, 4, 7},                                                   // left face (x = -1)
-        {6, 3, 7}, {6, 2, 3},                                                   // top face (y = +1)
-        {7, 4, 5}, {7, 5, 6},                                                   // back face (z = +1)
-      };
-
-      // set up matrices
-      static vec2f angles;
-      angles += rotation;
-      angles.x += 0.01f;                                                        // constant slow spin
-      quatf model_rotation{quatf::from_euler_angles_rad(0.0, angles.x, 0.0)};
-
-      vec3f camera_pos{0.0f, 2.0f, -5.0f};
-      camera_pos.rotate_rad_x(angles.y);
-
-      mat4f projection{make_projection_matrix(static_cast<vec2f>(window.viewport_size))};
-      mat4f look_at{mat4f::create_look_at(
-        camera_pos,                                                             // eye pos
-        {0.0f, 0.0f, 0.0f},                                                     // target pos
-        {0.0f, 1.0f, 0.0f}                                                      // up dir
-      )};
-
-      uniforms uniform_data{
-        projection * look_at * model_rotation.transform(),
-        mat3fwgpu{model_rotation.rotmatrix()},
-      };
-
-      // vertex buffer
-      wgpu::BufferDescriptor vertex_buffer_descriptor{
-        .label{"Vertex buffer 1"},
-        .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex},
-        .size{vertex_data.size() * sizeof(vertex_data[0])},
-      };
-      wgpu::Buffer vertex_buffer{webgpu.device.CreateBuffer(&vertex_buffer_descriptor)};
-      webgpu.queue.WriteBuffer(
-        vertex_buffer,                                                          // buffer
-        0,                                                                      // offset
-        vertex_data.data(),                                                     // data
-        vertex_data.size() * sizeof(vertex_data[0])                             // size
-      );
-
-      // index buffer
-      wgpu::BufferDescriptor index_buffer_descriptor{
-        .label{"Index buffer 1"},
-        .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index},
-        .size{index_data.size() * sizeof(index_data[0])},
-      };
-      wgpu::Buffer index_buffer{webgpu.device.CreateBuffer(&index_buffer_descriptor)};
-      webgpu.queue.WriteBuffer(
-        index_buffer,                                                           // buffer
-        0,                                                                      // offset
-        index_data.data(),                                                      // data
-        index_data.size() * sizeof(index_data[0])                               // size
-      );
-
-      // uniform buffer
-      wgpu::BufferDescriptor uniform_buffer_desecriptor{
-        .label{"Uniform buffer 1"},
-        .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform},
-        .size{sizeof(uniform_data)},
-      };
-      wgpu::Buffer uniform_buffer{webgpu.device.CreateBuffer(&uniform_buffer_desecriptor)};
-      webgpu.queue.WriteBuffer(
-        uniform_buffer,                                                         // buffer
-        0,                                                                      // offset
-        &uniform_data,                                                          // data
-        sizeof(uniform_data)                                                    // size
-      );
-
-      // uniform bind group
-      wgpu::BindGroupEntry bind_group_entry{
-        .binding{0},
-        .buffer{uniform_buffer},
-        .size{sizeof(uniforms)},
-      };
-      wgpu::BindGroupDescriptor bind_group_descriptor{
-        .label{"Bind group 1"},
-        .layout{webgpu.bind_group_layout},
-        .entryCount{1},                                                         // must correspond to layout
-        .entries{&bind_group_entry},
-      };
-      wgpu::BindGroup bind_group{webgpu.device.CreateBindGroup(&bind_group_descriptor)};
-
-      render_pass_encoder.SetVertexBuffer(0, vertex_buffer, 0, vertex_buffer.GetSize()); // slot, buffer, offset, size
-      render_pass_encoder.SetIndexBuffer(index_buffer, wgpu::IndexFormat::Uint16, 0, index_buffer.GetSize()); // buffer, format, offset, size
-      render_pass_encoder.SetBindGroup(0, bind_group);                          // groupIndex, group, dynamicOffsetCount = 0, dynamicOffsets = nullptr
-      render_pass_encoder.DrawIndexed(index_data.size() * decltype(index_data)::value_type::size()); // indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0
-
-      ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), render_pass_encoder.Get()); // render the outstanding GUI draw data
-
-      // TODO: add timestamp query: https://eliemichel.github.io/LearnWebGPU/advanced-techniques/benchmarking/time.html
-      render_pass_encoder.End();
-    }
-
-    command_encoder.InsertDebugMarker("Debug marker 1");
-
-    wgpu::CommandBufferDescriptor command_buffer_descriptor {
-      .label = "Command buffer 1"
+    wgpu::RenderPassDepthStencilAttachment render_pass_depth_stencil_attachment{
+      .view{webgpu.depth_texture_view},
+      .depthLoadOp{wgpu::LoadOp::Clear},
+      .depthStoreOp{wgpu::StoreOp::Store},
+      .depthClearValue{1.0f},
     };
-    wgpu::CommandBuffer command_buffer{command_encoder.Finish(&command_buffer_descriptor)};
+    wgpu::RenderPassDescriptor render_pass_descriptor{
+      .label{"Render pass 1"},
+      .colorAttachmentCount{1},
+      .colorAttachments{&render_pass_colour_attachment},
+      .depthStencilAttachment{&render_pass_depth_stencil_attachment},
+    };
+    wgpu::RenderPassEncoder render_pass_encoder{command_encoder.BeginRenderPass(&render_pass_descriptor)};
 
-    //webgpu.queue.OnSubmittedWorkDone(
-    //  [](WGPUQueueWorkDoneStatus status_c, void *data){
-    //    /// Submitted work done callback - note, this only fires for the subsequent submit
-    //    auto &renderer{*static_cast<webgpu_renderer*>(data)};
-    //    auto &logger{renderer.logger};
-    //    if(auto const status{static_cast<wgpu::QueueWorkDoneStatus>(status_c)}; status != wgpu::QueueWorkDoneStatus::Success) {
-    //      logger << "ERROR: WebGPU queue submitted work failure, status: " << enum_wgpu_name<wgpu::QueueWorkDoneStatus>(status_c);
-    //    }
-    //    logger << "DEBUG: WebGPU queue submitted work done";
-    //  },
-    //  this
-    //);
+    render_pass_encoder.SetPipeline(webgpu.pipeline);                           // select which render pipeline to use
 
-    webgpu.queue.Submit(1, &command_buffer);
+    // set up test buffers
+    std::vector<vertex> vertex_data{
+      {{-1.0f, -1.0f, -1.0f}, { 0.0f, -1.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // bottom face normal & colour
+      {{+1.0f, -1.0f, -1.0f}, {+1.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // right face normal & colour
+      {{+1.0f, +1.0f, -1.0f}, { 0.0f,  0.0f, -1.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // front face normal & colour
+      {{-1.0f, +1.0f, -1.0f}, {-1.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // left face normal & colour
+      {{-1.0f, -1.0f, +1.0f}, { 0.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // normal & colour not used
+      {{+1.0f, -1.0f, +1.0f}, { 0.0f,  0.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // normal & colour not used
+      {{+1.0f, +1.0f, +1.0f}, { 0.0f, +1.0f,  0.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // top face normal & colour
+      {{-1.0f, +1.0f, +1.0f}, { 0.0f,  0.0f, +1.0f}, {1.0f, 0.75f, 0.0f, 1.0f}}, // back face normal & colour
+    };
+    std::vector<triangle_index> index_data{
+      {0, 1, 5}, {0, 5, 4},                                                     // bottom face (y = -1)
+      {1, 6, 5}, {1, 2, 6},                                                     // right face (x = +1)
+      {2, 1, 0}, {2, 0, 3},                                                     // front face (z = -1)
+      {3, 0, 4}, {3, 4, 7},                                                     // left face (x = -1)
+      {6, 3, 7}, {6, 2, 3},                                                     // top face (y = +1)
+      {7, 4, 5}, {7, 5, 6},                                                     // back face (z = +1)
+    };
+
+    // set up matrices
+    static vec2f angles;
+    angles += rotation;
+    angles.x += 0.01f;                                                          // constant slow spin
+    quatf model_rotation{quatf::from_euler_angles_rad(0.0, angles.x, 0.0)};
+
+    vec3f camera_pos{0.0f, 2.0f, -5.0f};
+    camera_pos.rotate_rad_x(angles.y);
+
+    mat4f projection{make_projection_matrix(static_cast<vec2f>(window.viewport_size))};
+    mat4f look_at{mat4f::create_look_at(
+      camera_pos,                                                               // eye pos
+      {0.0f, 0.0f, 0.0f},                                                       // target pos
+      {0.0f, 1.0f, 0.0f}                                                        // up dir
+    )};
+
+    uniforms uniform_data{
+      projection * look_at * model_rotation.transform(),
+      mat3fwgpu{model_rotation.rotmatrix()},
+    };
+
+    // vertex buffer
+    wgpu::BufferDescriptor vertex_buffer_descriptor{
+      .label{"Vertex buffer 1"},
+      .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex},
+      .size{vertex_data.size() * sizeof(vertex_data[0])},
+    };
+    wgpu::Buffer vertex_buffer{webgpu.device.CreateBuffer(&vertex_buffer_descriptor)};
+    webgpu.queue.WriteBuffer(
+      vertex_buffer,                                                            // buffer
+      0,                                                                        // offset
+      vertex_data.data(),                                                       // data
+      vertex_data.size() * sizeof(vertex_data[0])                               // size
+    );
+
+    // index buffer
+    wgpu::BufferDescriptor index_buffer_descriptor{
+      .label{"Index buffer 1"},
+      .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index},
+      .size{index_data.size() * sizeof(index_data[0])},
+    };
+    wgpu::Buffer index_buffer{webgpu.device.CreateBuffer(&index_buffer_descriptor)};
+    webgpu.queue.WriteBuffer(
+      index_buffer,                                                             // buffer
+      0,                                                                        // offset
+      index_data.data(),                                                        // data
+      index_data.size() * sizeof(index_data[0])                                 // size
+    );
+
+    // uniform buffer
+    wgpu::BufferDescriptor uniform_buffer_desecriptor{
+      .label{"Uniform buffer 1"},
+      .usage{wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform},
+      .size{sizeof(uniform_data)},
+    };
+    wgpu::Buffer uniform_buffer{webgpu.device.CreateBuffer(&uniform_buffer_desecriptor)};
+    webgpu.queue.WriteBuffer(
+      uniform_buffer,                                                           // buffer
+      0,                                                                        // offset
+      &uniform_data,                                                            // data
+      sizeof(uniform_data)                                                      // size
+    );
+
+    // uniform bind group
+    wgpu::BindGroupEntry bind_group_entry{
+      .binding{0},
+      .buffer{uniform_buffer},
+      .size{sizeof(uniforms)},
+    };
+    wgpu::BindGroupDescriptor bind_group_descriptor{
+      .label{"Bind group 1"},
+      .layout{webgpu.bind_group_layout},
+      .entryCount{1},                                                           // must correspond to layout
+      .entries{&bind_group_entry},
+    };
+    wgpu::BindGroup bind_group{webgpu.device.CreateBindGroup(&bind_group_descriptor)};
+
+    render_pass_encoder.SetVertexBuffer(0, vertex_buffer, 0, vertex_buffer.GetSize()); // slot, buffer, offset, size
+    render_pass_encoder.SetIndexBuffer(index_buffer, wgpu::IndexFormat::Uint16, 0, index_buffer.GetSize()); // buffer, format, offset, size
+    render_pass_encoder.SetBindGroup(0, bind_group);                            // groupIndex, group, dynamicOffsetCount = 0, dynamicOffsets = nullptr
+    render_pass_encoder.DrawIndexed(index_data.size() * decltype(index_data)::value_type::size()); // indexCount, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0
+
+    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), render_pass_encoder.Get()); // render the outstanding GUI draw data
+
+    // TODO: add timestamp query: https://eliemichel.github.io/LearnWebGPU/advanced-techniques/benchmarking/time.html
+    render_pass_encoder.End();
   }
+
+  command_encoder.InsertDebugMarker("Debug marker 1");
+
+  wgpu::CommandBufferDescriptor command_buffer_descriptor {
+    .label = "Command buffer 1"
+  };
+  wgpu::CommandBuffer command_buffer{command_encoder.Finish(&command_buffer_descriptor)};
+
+  //webgpu.queue.OnSubmittedWorkDone(
+  //  [](WGPUQueueWorkDoneStatus status_c, void *data){
+  //    /// Submitted work done callback - note, this only fires for the subsequent submit
+  //    auto &renderer{*static_cast<webgpu_renderer*>(data)};
+  //    auto &logger{renderer.logger};
+  //    if(auto const status{static_cast<wgpu::QueueWorkDoneStatus>(status_c)}; status != wgpu::QueueWorkDoneStatus::Success) {
+  //      logger << "ERROR: WebGPU queue submitted work failure, status: " << enum_wgpu_name<wgpu::QueueWorkDoneStatus>(status_c);
+  //    }
+  //    logger << "DEBUG: WebGPU queue submitted work done";
+  //  },
+  //  this
+  //);
+
+  webgpu.queue.Submit(1, &command_buffer);
 }
 
 }
