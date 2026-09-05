@@ -55,7 +55,7 @@ game_manager::game_manager() {
   register_gamepad_events();
 
   renderer.init(
-    [&](render::webgpu_renderer::webgpu_data const& webgpu){
+    [&](armchair::render::webgpu::context const& webgpu){
       ImGui_ImplWGPU_InitInfo imgui_wgpu_info;
       imgui_wgpu_info.Device = webgpu.device.Get();
       imgui_wgpu_info.RenderTargetFormat = static_cast<WGPUTextureFormat>(webgpu.surface_preferred_format);

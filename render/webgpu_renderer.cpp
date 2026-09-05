@@ -119,9 +119,9 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   // Find the initial framebuffer size. Browser dimensions are CSS pixels, while
   // WebGPU surfaces and depth textures are sized in device pixels.
   update_viewport_size();
-  logger << "WebGPU: Viewport size: " << window.css_viewport_size << " (nominal device pixels: approx " << window.css_viewport_size * window.device_pixel_ratio << ", framebuffer " << window.viewport_size << ")";
-  logger << "WebGPU: CSS viewport size: " << window.css_viewport_size << " CSS pixels (framebuffer: " << window.viewport_size << " device pixels)";
-  logger << "WebGPU: Device pixel ratio: " << window.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * window.device_pixel_ratio)) << "% scale)";
+  logger << "WebGPU: Viewport size: " << webgpu.canvas.css_size << " (nominal device pixels: approx " << webgpu.canvas.css_size * webgpu.canvas.device_pixel_ratio << ", framebuffer " << webgpu.canvas.framebuffer_size << ")";
+  logger << "WebGPU: CSS viewport size: " << webgpu.canvas.css_size << " CSS pixels (framebuffer: " << webgpu.canvas.framebuffer_size << " device pixels)";
+  logger << "WebGPU: Device pixel ratio: " << webgpu.canvas.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * webgpu.canvas.device_pixel_ratio)) << "% scale)";
 
   // create a surface
   {
@@ -138,7 +138,7 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   state = states::ready_to_init;
 }
 
-void webgpu_renderer::init(std::function<void(webgpu_data const&)> &&this_postinit_callback, std::function<void()> &&this_main_loop_callback) {
+void webgpu_renderer::init(std::function<void(armchair::render::webgpu::context const&)> &&this_postinit_callback, std::function<void()> &&this_main_loop_callback) {
   /// Initialise the WebGPU system
   assert(state == states::ready_to_init && "webgpu_renderer::init requires state ready_to_init");
   postinit_callback = this_postinit_callback;
@@ -424,20 +424,20 @@ bool webgpu_renderer::update_viewport_size() {
   }
   vec2ui const new_viewport_size{static_cast<unsigned int>(framebuffer_width), static_cast<unsigned int>(framebuffer_height)};
 
-  if(new_viewport_size.x == 0 || new_viewport_size.y == 0 || new_viewport_size == window.viewport_size) return false;
+  if(new_viewport_size.x == 0 || new_viewport_size.y == 0 || new_viewport_size == webgpu.canvas.framebuffer_size) return false;
 
   double css_width{0.0};
   double css_height{0.0};
   if(emscripten_get_element_css_size("#canvas", &css_width, &css_height) != EMSCRIPTEN_RESULT_SUCCESS) {
     throw std::runtime_error{"Could not read canvas CSS size"};
   }
-  window.css_viewport_size.assign(css_width, css_height);
-  window.device_pixel_ratio = emscripten_get_device_pixel_ratio();
-  window.viewport_size = new_viewport_size;
+  webgpu.canvas.css_size.assign(css_width, css_height);
+  webgpu.canvas.device_pixel_ratio = emscripten_get_device_pixel_ratio();
+  webgpu.canvas.framebuffer_size = new_viewport_size;
   #ifdef DEBUG_WEBGPU
-    logger << "DEBUG: WebGPU: Viewport size: " << window.css_viewport_size << " (nominal device pixels: approx " << window.css_viewport_size * window.device_pixel_ratio << ", framebuffer " << window.viewport_size << ")";
-    logger << "DEBUG: WebGPU: CSS viewport size: " << window.css_viewport_size << " CSS pixels (framebuffer: " << window.viewport_size << " device pixels)";
-    logger << "DEBUG: WebGPU: Device pixel ratio: " << window.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * window.device_pixel_ratio)) << "% scale)";
+    logger << "DEBUG: WebGPU: Viewport size: " << webgpu.canvas.css_size << " (nominal device pixels: approx " << webgpu.canvas.css_size * webgpu.canvas.device_pixel_ratio << ", framebuffer " << webgpu.canvas.framebuffer_size << ")";
+    logger << "DEBUG: WebGPU: CSS viewport size: " << webgpu.canvas.css_size << " CSS pixels (framebuffer: " << webgpu.canvas.framebuffer_size << " device pixels)";
+    logger << "DEBUG: WebGPU: Device pixel ratio: " << webgpu.canvas.device_pixel_ratio << " device pixels per CSS pixel (" << static_cast<unsigned int>(std::round(100.0 * webgpu.canvas.device_pixel_ratio)) << "% scale)";
   #endif // DEBUG_WEBGPU
   return true;
 }
@@ -447,16 +447,16 @@ void webgpu_renderer::configure_surface() {
 
   emscripten_set_canvas_element_size(
     "#canvas",
-    static_cast<int>(window.viewport_size.x),
-    static_cast<int>(window.viewport_size.y)
+    static_cast<int>(webgpu.canvas.framebuffer_size.x),
+    static_cast<int>(webgpu.canvas.framebuffer_size.y)
   );
 
   wgpu::SurfaceConfiguration surface_configuration{
     .device{webgpu.device},
     .format{webgpu.surface_preferred_format},
     .usage{wgpu::TextureUsage::RenderAttachment},
-    .width{window.viewport_size.x},
-    .height{window.viewport_size.y},
+    .width{webgpu.canvas.framebuffer_size.x},
+    .height{webgpu.canvas.framebuffer_size.y},
     .alphaMode{wgpu::CompositeAlphaMode::Auto},
     .presentMode{wgpu::PresentMode::Fifo},
   };
@@ -471,8 +471,8 @@ void webgpu_renderer::init_depth_texture() {
       .usage{wgpu::TextureUsage::RenderAttachment},
       .dimension{wgpu::TextureDimension::e2D},
       .size{
-        window.viewport_size.x,
-        window.viewport_size.y,
+        webgpu.canvas.framebuffer_size.x,
+        webgpu.canvas.framebuffer_size.y,
         1
       },
       .format{webgpu.depth_texture_format},
@@ -617,12 +617,12 @@ void webgpu_renderer::configure() {
       .entryCount{1},
       .entries{&binding_layout},
     };
-    webgpu.bind_group_layout_default = webgpu.device.CreateBindGroupLayout(&bind_group_layout_descriptor);
+    bind_group_layout_default = webgpu.device.CreateBindGroupLayout(&bind_group_layout_descriptor);
 
     wgpu::PipelineLayoutDescriptor pipeline_layout_descriptor{
       .label{"Pipeline layout 1"},
       .bindGroupLayoutCount{1},
-      .bindGroupLayouts{&webgpu.bind_group_layout_default},
+      .bindGroupLayouts{&bind_group_layout_default},
     };
     wgpu::PipelineLayout pipeline_layout{webgpu.device.CreatePipelineLayout(&pipeline_layout_descriptor)};
 
@@ -644,7 +644,7 @@ void webgpu_renderer::configure() {
       .multisample{},
       .fragment{&fragment_state},
     };
-    webgpu.pipeline = webgpu.device.CreateRenderPipeline(&render_pipeline_descriptor);
+    pipeline = webgpu.device.CreateRenderPipeline(&render_pipeline_descriptor);
   }
 
   logger << "WebGPU creating depth texture";
@@ -694,7 +694,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     };
     wgpu::RenderPassEncoder render_pass_encoder{command_encoder.BeginRenderPass(&render_pass_descriptor)};
 
-    render_pass_encoder.SetPipeline(webgpu.pipeline);                           // select which render pipeline to use
+    render_pass_encoder.SetPipeline(pipeline);                                  // select which render pipeline to use
 
     // set up test buffers
     std::vector<vertex> vertex_data{
@@ -725,7 +725,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     vec3f camera_pos{0.0f, 2.0f, -5.0f};
     camera_pos.rotate_rad_x(angles.y);
 
-      mat4f projection_matrix{projection.matrix(static_cast<vec2f>(window.viewport_size))};
+      mat4f projection_matrix{projection.matrix(static_cast<vec2f>(webgpu.canvas.framebuffer_size))};
     mat4f look_at{mat4f::create_look_at(
       camera_pos,                                                               // eye pos
       {0.0f, 0.0f, 0.0f},                                                       // target pos
@@ -787,7 +787,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
     };
     wgpu::BindGroupDescriptor bind_group_descriptor{
       .label{"Bind group 1"},
-      .layout{webgpu.bind_group_layout_default},
+      .layout{bind_group_layout_default},
       .entryCount{1},                                                           // must correspond to layout
       .entries{&bind_group_entry},
     };
