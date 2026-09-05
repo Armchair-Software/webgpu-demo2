@@ -32,9 +32,7 @@ void webgpu_renderer::configure() {
   assert(state == states::unconfigured && "webgpu_renderer::configure requires an unconfigured renderer");
   assert(webgpu.state == webgpu_states::ready_to_configure && "webgpu_renderer::configure requires WebGPU context ready_to_configure");
   logger << "WebGPU device ready, configuring surface";
-  // Adapter/device acquisition is asynchronous, so refresh the browser dimensions
-  // immediately before configuration as they may have changed since construction.
-  webgpu.canvas.update_size();
+  webgpu.canvas.update_size();                                                  // adapter/device acquisition is asynchronous, so refresh the browser dimensions immediately before configuration as they may have changed since construction.
   webgpu.configure_surface();
 
   logger << "WebGPU assembling shaders";
