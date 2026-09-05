@@ -4,6 +4,7 @@
 #include <boost/throw_exception.hpp>
 #include <emscripten/html5.h>
 #include <imgui/imgui_impl_wgpu.h>
+#include <magic_enum/magic_enum.hpp>
 #include "logstorm/logstorm.h"
 #include "gui/gui_renderer.h"
 #include "render/webgpu_renderer.h"
@@ -44,6 +45,7 @@ class game_manager {
   void set_gamepad_callbacks(gamepad& this_gamepad);
   void handle_gamepad_events();
 
+  void loop_wait_startup_graphics();
   void loop_main();
 
 public:
@@ -54,19 +56,42 @@ game_manager::game_manager() {
   /// Run the game
   register_gamepad_events();
 
-  renderer.init(
-    [&](armchair::render::webgpu::context const& webgpu){
-      ImGui_ImplWGPU_InitInfo imgui_wgpu_info;
-      imgui_wgpu_info.Device = webgpu.device.Get();
-      imgui_wgpu_info.RenderTargetFormat = static_cast<WGPUTextureFormat>(webgpu.surface_preferred_format);
-      imgui_wgpu_info.DepthStencilFormat = static_cast<WGPUTextureFormat>(webgpu.depth_texture_format);
+  logger << "Launching initialisation wait loop";
+  emscripten_set_main_loop_arg([](void *data){
+    auto &game{*static_cast<game_manager*>(data)};
+    game.loop_wait_startup_graphics();
+  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
+}
 
-      gui.init(imgui_wgpu_info);
-    },
-    [&]{
-      loop_main();
-    }
-  );
+void game_manager::loop_wait_startup_graphics() {
+  /// Wait for graphics async startup resources to become ready before we can start the main loop
+  if(renderer.state != render::webgpu_renderer::states::ready_to_configure) {
+    logger << "Waiting for WebGPU device to become available, currently " << magic_enum::enum_name(renderer.state);
+    if(renderer.state == render::webgpu_renderer::states::failed) throw std::runtime_error{"WebGPU device failed to initialise"};
+    // TODO: sensible timeout
+    return;
+  }
+  emscripten_cancel_main_loop();
+
+  renderer.configure();
+  if(renderer.state != render::webgpu_renderer::states::ready_to_draw) {
+    throw std::runtime_error{"ERROR: WebGPU renderer is not ready to draw after configuration!"};
+  }
+
+  logger << "WebGPU initialisation complete, creating GUI";
+  {
+    ImGui_ImplWGPU_InitInfo imgui_wgpu_info;
+    imgui_wgpu_info.Device = renderer.get_device().Get();
+    imgui_wgpu_info.RenderTargetFormat = static_cast<WGPUTextureFormat>(renderer.get_surface_preferred_format());
+    imgui_wgpu_info.DepthStencilFormat = static_cast<WGPUTextureFormat>(renderer.get_depth_texture_format());
+    gui.init(imgui_wgpu_info);
+  }
+
+  logger << "Initialisation complete, launching main loop";
+  emscripten_set_main_loop_arg([](void *data){
+    auto &game{*static_cast<game_manager*>(data)};
+    game.loop_main();
+  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
 void game_manager::register_gamepad_events() {

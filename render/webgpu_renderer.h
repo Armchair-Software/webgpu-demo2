@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <emscripten/em_types.h>
 #include <webgpu/webgpu_cpp.h>
 #include "armchair2/render/projection.h"
@@ -41,24 +40,24 @@ private:
   wgpu::BindGroupLayout bind_group_layout_default;
   wgpu::RenderPipeline pipeline;
 
-  std::function<void(armchair::render::webgpu::context const&)> postinit_callback; // the callback that is called once when init completes
-  std::function<void()> main_loop_callback;                                     // the callback that is called repeatedly for the main loop after init
-
 public:
   webgpu_renderer(logstorm::manager &logger);
 
-  void init(std::function<void(armchair::render::webgpu::context const&)> &&postinit_callback, std::function<void()> &&main_loop_callback);
+  void init();
 
 private:
   bool update_viewport_size();
   void configure_surface();
   void init_depth_texture();
 
-  void wait_to_configure_loop();
+public:
   void configure();
 
-public:
   void draw(vec2f const& rotation);
+
+  wgpu::Device const &get_device() const;
+  wgpu::TextureFormat get_surface_preferred_format() const;
+  wgpu::TextureFormat get_depth_texture_format() const;
 };
 
 }

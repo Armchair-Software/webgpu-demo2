@@ -136,14 +136,13 @@ webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   }
   if(!webgpu.surface) throw std::runtime_error{"Could not create WebGPU surface"};
   state = states::ready_to_init;
+
+  init();
 }
 
-void webgpu_renderer::init(std::function<void(armchair::render::webgpu::context const&)> &&this_postinit_callback, std::function<void()> &&this_main_loop_callback) {
+void webgpu_renderer::init() {
   /// Initialise the WebGPU system
   assert(state == states::ready_to_init && "webgpu_renderer::init requires state ready_to_init");
-  postinit_callback = this_postinit_callback;
-  main_loop_callback = this_main_loop_callback;
-
   {
     // request an adapter
     wgpu::RequestAdapterOptions adapter_request_options{
@@ -407,12 +406,6 @@ void webgpu_renderer::init(std::function<void(armchair::render::webgpu::context 
     );
   }
   state = states::waiting_for_device;
-
-  emscripten_set_main_loop_arg([](void *data){
-    /// Dispatch the loop waiting for WebGPU to become ready
-    auto &renderer{*static_cast<webgpu_renderer*>(data)};
-    renderer.wait_to_configure_loop();
-  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
 bool webgpu_renderer::update_viewport_size() {
@@ -492,32 +485,6 @@ void webgpu_renderer::init_depth_texture() {
     };
     webgpu.depth_texture_view = webgpu.depth_texture.CreateView(&depth_texture_view_descriptor);
   }
-}
-
-void webgpu_renderer::wait_to_configure_loop() {
-  /// Check if initialisation has completed and the WebGPU system is ready for configuration
-  /// Since init occurs asynchronously, some emscripten ticks are needed before this becomes true
-  if(state != states::ready_to_configure) {
-    logger << "WebGPU: Waiting for device to become available, currently " << magic_enum::enum_name(state);
-    if(state == states::failed) throw std::runtime_error{"WebGPU device failed to initialise"};
-    // TODO: sensible timeout
-    return;
-  }
-  emscripten_cancel_main_loop();
-
-  configure();
-
-  if(postinit_callback) {
-    logger << "WebGPU: Configuration complete, running post-init tasks";
-    postinit_callback(webgpu);                                                  // perform any user-provided post-init tasks before launching the main loop
-  }
-
-  logger << "WebGPU: Launching main loop";
-  emscripten_set_main_loop_arg([](void *data){
-    /// Main pseudo-loop waiting for initialisation to complete
-    auto &renderer{*static_cast<webgpu_renderer*>(data)};
-    renderer.main_loop_callback();
-  }, this, 0, false);                                                           // loop function, user data, FPS (0 to use browser requestAnimationFrame mechanism), don't simulate infinite loop
 }
 
 void webgpu_renderer::configure() {
@@ -825,6 +792,17 @@ void webgpu_renderer::draw(vec2f const& rotation) {
   //);
 
   webgpu.queue.Submit(1, &command_buffer);
+}
+
+wgpu::Device const &webgpu_renderer::get_device() const {
+  assert(state == states::ready_to_draw && "webgpu_renderer::get_device requires state ready_to_draw");
+  return webgpu.device;
+}
+wgpu::TextureFormat webgpu_renderer::get_surface_preferred_format() const {
+  return webgpu.surface_preferred_format;
+}
+wgpu::TextureFormat webgpu_renderer::get_depth_texture_format() const {
+  return webgpu.depth_texture_format;
 }
 
 }
