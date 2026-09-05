@@ -3,13 +3,13 @@
 #include <array>
 #include <set>
 #include <string>
-#include <string_view>
-#include <type_traits>
 #include <vector>
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <imgui/imgui_impl_wgpu.h>
 #include <magic_enum/magic_enum.hpp>
+#include "armchair2/render/webgpu/dawn_to_string_view.h"
+#include "armchair2/render/webgpu/enum_name.h"
 #include "vertex.h"
 #include "triangle_index.h"
 #include "uniforms.h"
@@ -19,46 +19,8 @@
 
 namespace render {
 
-namespace {
-template<typename Tcpp, typename Tc>
-  requires (!std::is_same_v<Tcpp, Tc>)
-std::string enum_wgpu_name(Tc enum_in) {
-  /// Attempt to interpret an enum into its most human-readable form, with fallbacks for unknown types
-  /// Tc is the C API enum (WGPU...), Tcpp is the C++ API enum equivalent (wgpu::...)
-  using value_type = std::underlying_type_t<Tc>;
-  auto const enum_value{static_cast<value_type>(enum_in)};
-
-  if(auto enum_out_opt{magic_enum::enum_cast<Tcpp>(enum_value)}; enum_out_opt.has_value()) { // first try to cast it to the C++ enum for clearest output
-    return std::string{magic_enum::enum_name(*enum_out_opt)};
-  }
-
-  if(auto enum_out_opt{magic_enum::enum_cast<Tc>(enum_value)}; enum_out_opt.has_value()) { // fall back to trying the C enum interpretation
-   return std::string{magic_enum::enum_name(*enum_out_opt)} + " (C binding only)";
-  }
-
-  std::ostringstream oss;
-  oss << "unknown enum 0x" << std::hex << enum_value;                           // otherwise output the hex value and an explanatory note
-  return oss.str();
-}
-
-template<typename Tenum>
-std::string enum_wgpu_name(Tenum enum_in) {
-  /// Interpret a C++ WebGPU enum directly
-  if(auto const enum_name{magic_enum::enum_name(enum_in)}; !enum_name.empty()) {
-    return std::string{enum_name};
-  }
-
-  std::ostringstream oss;
-  oss << "unknown enum 0x" << std::hex << static_cast<std::underlying_type_t<Tenum>>(enum_in);
-  return oss.str();
-}
-
-std::string_view string_wgpu(wgpu::StringView string_in) {
-  /// Convert Dawn string views to standard string views for logging
-  return static_cast<std::string_view>(string_in);
-}
-
-}
+using armchair::render::webgpu::enum_name;
+using armchair::render::webgpu::dawn_to_string_view;
 
 webgpu_renderer::webgpu_renderer(logstorm::manager &this_logger)
   : logger{this_logger},
@@ -158,9 +120,9 @@ void webgpu_renderer::init() {
         auto &renderer{*renderer_ptr};
         auto &logger{renderer.logger};
         auto &webgpu{renderer.webgpu};
-        if(message.length) logger << "WebGPU: Request adapter callback message: " << string_wgpu(message);
+        if(message.length) logger << "WebGPU: Request adapter callback message: " << dawn_to_string_view(message);
         if(status != wgpu::RequestAdapterStatus::Success) {
-          logger << "ERROR: WebGPU adapter request failure, status " << enum_wgpu_name<wgpu::RequestAdapterStatus>(status);
+          logger << "ERROR: WebGPU adapter request failure, status " << enum_name<wgpu::RequestAdapterStatus>(status);
           throw std::runtime_error{"WebGPU: Could not get adapter"};
         }
 
@@ -199,15 +161,15 @@ void webgpu_renderer::init() {
           wgpu::AdapterInfo adapter_info;
           adapter.GetInfo(&adapter_info);
           #ifdef DEBUG_WEBGPU
-            logger << "DEBUG: WebGPU adapter info: vendor: " << string_wgpu(adapter_info.vendor);
-            logger << "DEBUG: WebGPU adapter info: architecture: " << string_wgpu(adapter_info.architecture);
-            logger << "DEBUG: WebGPU adapter info: device: " << string_wgpu(adapter_info.device);
-            logger << "DEBUG: WebGPU adapter info: description: " << string_wgpu(adapter_info.description);
+            logger << "DEBUG: WebGPU adapter info: vendor: " << dawn_to_string_view(adapter_info.vendor);
+            logger << "DEBUG: WebGPU adapter info: architecture: " << dawn_to_string_view(adapter_info.architecture);
+            logger << "DEBUG: WebGPU adapter info: device: " << dawn_to_string_view(adapter_info.device);
+            logger << "DEBUG: WebGPU adapter info: description: " << dawn_to_string_view(adapter_info.description);
             logger << "DEBUG: WebGPU adapter info: vendorID:deviceID: " << adapter_info.vendorID << ":" << adapter_info.deviceID;
             logger << "DEBUG: WebGPU adapter info: backendType: " << magic_enum::enum_name(adapter_info.backendType);
             logger << "DEBUG: WebGPU adapter info: adapterType: " << magic_enum::enum_name(adapter_info.adapterType);
           #endif // DEBUG_WEBGPU
-          logger << "WebGPU adapter info: " << string_wgpu(adapter_info.description) << " (" << magic_enum::enum_name(adapter_info.backendType) << ", " << string_wgpu(adapter_info.vendor) << ", " << string_wgpu(adapter_info.architecture) << ")";
+          logger << "WebGPU adapter info: " << dawn_to_string_view(adapter_info.description) << " (" << magic_enum::enum_name(adapter_info.backendType) << ", " << dawn_to_string_view(adapter_info.vendor) << ", " << dawn_to_string_view(adapter_info.architecture) << ")";
         }
         std::set<wgpu::FeatureName> adapter_features;
         {
@@ -223,7 +185,7 @@ void webgpu_renderer::init() {
         }
         #ifdef DEBUG_WEBGPU
           for(auto const feature : adapter_features) {
-            logger << "DEBUG: WebGPU adapter features: " << enum_wgpu_name(feature);
+            logger << "DEBUG: WebGPU adapter features: " << enum_name(feature);
           }
         #endif // DEBUG_WEBGPU
 
@@ -311,7 +273,7 @@ void webgpu_renderer::init() {
             /// Device lost callback
             auto &renderer{*renderer_ptr};
             auto &logger{renderer.logger};
-            logger << "ERROR: WebGPU lost device, reason " << enum_wgpu_name<wgpu::DeviceLostReason>(reason) << ": " << string_wgpu(message);
+            logger << "ERROR: WebGPU lost device, reason " << enum_name<wgpu::DeviceLostReason>(reason) << ": " << dawn_to_string_view(message);
             renderer.state = states::failed;
           },
           &renderer
@@ -321,7 +283,7 @@ void webgpu_renderer::init() {
             /// Uncaptured error callback
             auto &renderer{*renderer_ptr};
             auto &logger{renderer.logger};
-            logger << "ERROR: WebGPU uncaptured error " << enum_wgpu_name<wgpu::ErrorType>(type) << ": " << string_wgpu(message);
+            logger << "ERROR: WebGPU uncaptured error " << enum_name<wgpu::ErrorType>(type) << ": " << dawn_to_string_view(message);
             renderer.state = states::failed;
           },
           &renderer
@@ -335,9 +297,9 @@ void webgpu_renderer::init() {
             auto &renderer{*renderer_ptr};
             auto &logger{renderer.logger};
             auto &webgpu{renderer.webgpu};
-            if(message.length) logger << "WebGPU: Request device callback message: " << string_wgpu(message);
+            if(message.length) logger << "WebGPU: Request device callback message: " << dawn_to_string_view(message);
             if(status != wgpu::RequestDeviceStatus::Success) {
-              logger << "ERROR: WebGPU device request failure, status " << enum_wgpu_name<wgpu::RequestDeviceStatus>(status);
+              logger << "ERROR: WebGPU device request failure, status " << enum_name<wgpu::RequestDeviceStatus>(status);
               throw std::runtime_error{"WebGPU: Could not get adapter"};
             }
             auto &device{webgpu.device};
@@ -784,7 +746,7 @@ void webgpu_renderer::draw(vec2f const& rotation) {
   //    auto &renderer{*static_cast<webgpu_renderer*>(data)};
   //    auto &logger{renderer.logger};
   //    if(auto const status{static_cast<wgpu::QueueWorkDoneStatus>(status_c)}; status != wgpu::QueueWorkDoneStatus::Success) {
-  //      logger << "ERROR: WebGPU queue submitted work failure, status: " << enum_wgpu_name<wgpu::QueueWorkDoneStatus>(status_c);
+  //      logger << "ERROR: WebGPU queue submitted work failure, status: " << enum_name<wgpu::QueueWorkDoneStatus>(status_c);
   //    }
   //    logger << "DEBUG: WebGPU queue submitted work done";
   //  },
