@@ -23,26 +23,14 @@ class webgpu_renderer {
 
 public:
   armchair::render::perspective_projection projection;
-
-  enum class states {
-    uninitialised,
-    ready_to_init,
-    waiting_for_device,
-    ready_to_configure,
-    ready_to_draw,
-    failed,
-  } state{states::uninitialised};
-
-private:
   armchair::render::webgpu::context webgpu;
 
+private:
   wgpu::BindGroupLayout bind_group_layout_default;
   wgpu::RenderPipeline pipeline;
 
 public:
   webgpu_renderer(logstorm::manager &logger);
-
-  void init();
 
 private:
   void configure_surface();
@@ -52,10 +40,6 @@ public:
   void configure();
 
   void draw(vec2f const& rotation);
-
-  wgpu::Device const &get_device() const;
-  wgpu::TextureFormat get_surface_preferred_format() const;
-  wgpu::TextureFormat get_depth_texture_format() const;
 };
 
 }

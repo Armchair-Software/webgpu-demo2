@@ -65,25 +65,25 @@ game_manager::game_manager() {
 
 void game_manager::loop_wait_startup_graphics() {
   /// Wait for graphics async startup resources to become ready before we can start the main loop
-  if(renderer.state != render::webgpu_renderer::states::ready_to_configure) {
-    logger << "Waiting for WebGPU device to become available, currently " << magic_enum::enum_name(renderer.state);
-    if(renderer.state == render::webgpu_renderer::states::failed) throw std::runtime_error{"WebGPU device failed to initialise"};
+  if(renderer.webgpu.state != armchair::render::webgpu::states::ready_to_configure) {
+    logger << "Waiting for WebGPU device to become available, currently " << magic_enum::enum_name(renderer.webgpu.state);
+    if(renderer.webgpu.state == armchair::render::webgpu::states::failed) throw std::runtime_error{"WebGPU device failed to initialise"};
     // TODO: sensible timeout
     return;
   }
   emscripten_cancel_main_loop();
 
   renderer.configure();
-  if(renderer.state != render::webgpu_renderer::states::ready_to_draw) {
+  if(renderer.webgpu.state != armchair::render::webgpu::states::ready_to_draw) {
     throw std::runtime_error{"ERROR: WebGPU renderer is not ready to draw after configuration!"};
   }
 
   logger << "WebGPU initialisation complete, creating GUI";
   {
     ImGui_ImplWGPU_InitInfo imgui_wgpu_info;
-    imgui_wgpu_info.Device = renderer.get_device().Get();
-    imgui_wgpu_info.RenderTargetFormat = static_cast<WGPUTextureFormat>(renderer.get_surface_preferred_format());
-    imgui_wgpu_info.DepthStencilFormat = static_cast<WGPUTextureFormat>(renderer.get_depth_texture_format());
+    imgui_wgpu_info.Device = renderer.webgpu.device.Get();
+    imgui_wgpu_info.RenderTargetFormat = static_cast<WGPUTextureFormat>(renderer.webgpu.surface_preferred_format);
+    imgui_wgpu_info.DepthStencilFormat = static_cast<WGPUTextureFormat>(renderer.webgpu.depth_texture_format);
     gui.init(imgui_wgpu_info);
   }
 
