@@ -125,6 +125,7 @@ add_executable(client
   # project-specific:
   main.cpp
   armchair2/render/projection.cpp
+  armchair2/render/webgpu/canvas.cpp
   gui/clipboard.cpp
   gui/gui_renderer.cpp
   render/webgpu_renderer.cpp

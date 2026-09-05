@@ -1,6 +1,5 @@
 #pragma once
 
-#include <emscripten/em_types.h>
 #include <webgpu/webgpu_cpp.h>
 #include "armchair2/render/projection.h"
 #include "armchair2/render/webgpu/context.h"
@@ -46,7 +45,6 @@ public:
   void init();
 
 private:
-  bool update_viewport_size();
   void configure_surface();
   void init_depth_texture();
 
